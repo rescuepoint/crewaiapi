@@ -7,6 +7,8 @@ from langchain_anthropic import ChatAnthropic
 from crewai import LLM
 from langchain_openai.chat_models.base import BaseChatOpenAI
 from litellm import completion
+import time
+import requests
 
 def load_secrets_fron_env():
     load_dotenv(override=True)
@@ -19,22 +21,34 @@ def load_secrets_fron_env():
             "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
             "OLLAMA_HOST": os.getenv("OLLAMA_HOST"),
             "XAI_API_KEY": os.getenv("XAI_API_KEY"),
+            "BLIP_CLIENT_ID": os.getenv("BLIP_CLIENT_ID"),
+            "BLIP_CLIENT_SECRET": os.getenv("BLIP_CLIENT_SECRET"),
+            "BLIP_TENANT_ID": os.getenv("BLIP_TENANT_ID"),
         }
     else:
         st.session_state.env_vars = st.session_state.env_vars
 
 def switch_environment(new_env_vars):
     for key, value in new_env_vars.items():
-        if value is not None:
+        if value not in (None, ""):
             os.environ[key] = value
             st.session_state.env_vars[key] = value
 
 def restore_environment():
+    """Restaura o ambiente com os valores armazenados em session_state.
+
+    Se um valor for ``None`` removemos a variável de ambiente caso exista. Isso
+    evita que chaves desnecessárias (por exemplo `OPENAI_API_KEY`) permaneçam
+    definidas e causem rotas de fallback inesperadas dentro do LiteLLM / OpenAI
+    quando estamos usando outro provedor como a Blip.
+    """
     for key, value in st.session_state.env_vars.items():
-        if value is not None:
+        if value not in (None, ""):
+            # Restaura o valor original
             os.environ[key] = value
-        elif key in os.environ:
-            del os.environ[key]
+        else:
+            # Remove variável se estiver presente
+            os.environ.pop(key, None)
 
 def safe_pop_env_var(key):
     os.environ.pop(key, None)
@@ -127,6 +141,85 @@ def create_lmstudio_llm(model, temperature):
     else:
         raise ValueError("LM Studio API base not set in .env file")
 
+class BlipLLMWrapper:
+    def __init__(self, model_name="gpt-4o-mini", temperature=0.5, max_tokens=800):
+        self.client_id = os.getenv("BLIP_CLIENT_ID")
+        self.client_secret = os.getenv("BLIP_CLIENT_SECRET")
+        self.app = os.getenv("BLIP_APP", "CrewAI-Studio")
+        self.tenant_id = os.getenv("BLIP_TENANT_ID")
+        self.model_name = model_name
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.token_info = None
+        if not all([self.client_id, self.client_secret, self.tenant_id]):
+            raise ValueError("Variáveis de ambiente BLIP_CLIENT_ID, BLIP_CLIENT_SECRET e BLIP_TENANT_ID precisam estar definidas.")
+
+    def _get_token(self):
+        url = "https://secure-backend-api.stilingue.com.br/blip-ai-suite-auth/prod/token"
+        headers = {"accept": "application/json", "Content-Type": "application/json"}
+        data = {
+            "grant_type": "client_credentials",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+        }
+        response = requests.post(url, headers=headers, json=data)
+        if response.status_code == 200:
+            self.token_info = response.json()
+            return self.token_info["access_token"]
+        else:
+            raise Exception(f"Erro ao obter token: {response.status_code} - {response.text}")
+
+    def _get_valid_token(self):
+        if not self.token_info or self.token_info.get("expires_on", 0) - 10 < int(time.time()):
+            return self._get_token()
+        return self.token_info["access_token"]
+
+    def call(self, prompt: str, **kwargs) -> str:
+        token = self._get_valid_token()
+        url = "https://secure-backend-api.stilingue.com.br/llm-server/prod/message-gen/generate"
+        headers = {
+            "Authorization": token,
+            "Content-Type": "application/json",
+            "accept": "application/json",
+        }
+        payload = {
+            "sender": {
+                "app": self.app,
+                "tenant_id": self.tenant_id,
+                "subs_id": os.getenv("BLIP_SUBS_ID"),
+                "subs_name": self.app,
+            },
+            "prompt": {
+                "messages": [
+                    {"role": "system", "content": "Você é um assistente útil e preciso."},
+                    {"role": "user", "content": str(prompt)}
+                ]
+            },
+            "request_config": {
+                "request_params": {
+                    "temperature": kwargs.get("temperature", self.temperature),
+                    "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+                },
+                "api_version": "2024-02-01"
+            },
+            "resource_config": {
+                "service": "auto_azure_open_ai",
+                "params": {"model_name": self.model_name}
+            }
+        }
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            raise Exception(f"Erro ao chamar o LLM Server: {response.status_code} - {response.text}")
+        return response.json()["choices"][0]["content"]
+
+    # compatibilidade com CrewAI: objeto pode ser chamado diretamente
+    def __call__(self, prompt: str, **kwargs):
+        return self.call(prompt, **kwargs)
+
+
+def create_blip_llm(model="gpt-4o-mini", temperature=0.5):
+    return BlipLLMWrapper(model_name=model, temperature=temperature)
+
 LLM_CONFIG = {
     "OpenAI": {
         "models": os.getenv("OPENAI_PROXY_MODELS", "").split(",") if os.getenv("OPENAI_PROXY_MODELS") else ["gpt-4.1-mini","gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo", "gpt-4-turbo"],
@@ -151,6 +244,10 @@ LLM_CONFIG = {
      "Xai": {
         "models": ["xai/grok-2-1212", "xai/grok-beta"],
         "create_llm": create_xai_llm,
+    },
+    "Blip": {
+        "models": ["gpt-4o-mini"],
+        "create_llm": create_blip_llm,
     },
 }
 

@@ -84,9 +84,19 @@ class MyAgent:
         return True
 
     def validate_llm_provider_model(self):
+        # Remove espaços extras e garante correspondência exata
+        if isinstance(self.llm_provider_model, str):
+            self.llm_provider_model = self.llm_provider_model.strip()
         available_models = llm_providers_and_models()
         if self.llm_provider_model not in available_models:
-            self.llm_provider_model = available_models[0]
+            # Se não encontrar correspondência exata, tenta comparação case-insensitive
+            normalized = self.llm_provider_model.lower()
+            matches = [m for m in available_models if m.lower() == normalized]
+            if matches:
+                self.llm_provider_model = matches[0]
+            else:
+                # Último recurso: assume primeiro modelo disponível
+                self.llm_provider_model = available_models[0]
 
     def draw(self, key=None):
         self.validate_llm_provider_model()

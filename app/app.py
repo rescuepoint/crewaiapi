@@ -9,6 +9,7 @@ from pg_crew_run import PageCrewRun
 from pg_export_crew import PageExportCrew
 from pg_results import PageResults
 from pg_knowledge import PageKnowledge
+from pg_notebook_transform import PageNotebookTransform
 from dotenv import load_dotenv
 from llms import load_secrets_fron_env
 import os
@@ -19,9 +20,10 @@ def pages():
         'Tools': PageTools(),
         'Agents': PageAgents(),
         'Tasks': PageTasks(),
-        'Knowledge': PageKnowledge(),  # Add this line
+        'Knowledge': PageKnowledge(),
         'Kickoff!': PageCrewRun(),
         'Results': PageResults(),
+        'Notebook Transform': PageNotebookTransform(),
         'Import/export': PageExportCrew()
     }
 

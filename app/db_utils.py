@@ -146,6 +146,10 @@ def load_agents():
         data = row[1]
         tool_ids = data.pop('tool_ids', [])
         knowledge_source_ids = data.pop('knowledge_source_ids', [])
+        # Normaliza o nome do modelo/fornecedor removendo espaços supérfluos
+        if 'llm_provider_model' in data and isinstance(data['llm_provider_model'], str):
+            data['llm_provider_model'] = data['llm_provider_model'].strip()
+
         agent = MyAgent(id=row[0], knowledge_source_ids=knowledge_source_ids, **data)
         agent.tools = [tools_dict[tool_id] for tool_id in tool_ids if tool_id in tools_dict]
         agents.append(agent)
